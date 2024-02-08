@@ -1,13 +1,39 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:dart_mqtt/dart_mqtt.dart';
+import 'package:media_control_mqtt/slide_control.dart';
+import 'package:mqtt_client/mqtt_client.dart';
+import 'package:mqtt_client/mqtt_server_client.dart';
+import 'package:page_view_dot_indicator/page_view_dot_indicator.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(MyApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class MyApp extends StatefulWidget {
+  MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  int pageIndex = 0;
+  int pageCount = 2;
+  late PageController pageController;
+
+  @override
+  void initState() {
+    // TODO: implement initState
+    super.initState();
+    pageController = PageController(initialPage: pageIndex);
+  }
+
+  @override
+  void dispose() {
+    // TODO: implement dispose
+    print("Media Control Disposed");
+    super.dispose();
+  }
 
   // This widget is the root of your application.
   @override
@@ -18,32 +44,103 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.cyan),
         useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Super Quick Volume Control'),
+      home: Stack(
+        alignment: Alignment.bottomLeft,
+        children: [
+          PageView(
+            controller: pageController,
+            onPageChanged: (page) => setState(() => pageIndex = page),
+            children: const <Widget>[
+              MediaControl(title: 'Super Quick Volume Control'),
+              PresentControl(title: 'Super Quick PowerPoint Control'),
+            ],
+          ),
+          Positioned(
+            bottom: 20,
+            child: PageViewDotIndicator(
+              currentItem: pageIndex,
+              count: pageCount,
+              unselectedColor: Colors.grey[400]!,
+              selectedColor: Colors.grey[800]!,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+class MediaControl extends StatefulWidget {
+  const MediaControl({super.key, required this.title});
   final String title;
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<MediaControl> createState() => _MediaControlState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  late MqttClient mqttClient;
+class _MediaControlState extends State<MediaControl> {
+  final mqttClient = MqttServerClient('api.easyfarming.net', '');
   String playingStatus = "Paused";
   String muteStatus = "false";
   String vol = "0";
-  // void onMessage(var msg) {
-  //   String data = String.fromCharCodes(msg.data);
-  //   // dynamic dataJSON = jsonDecode(data);
-  //   playingStatus = data;
-  //   print(data);
-  //   setState(() {});
-  //   // print("message arrived");
-  // }
+
+  void onConnected() {
+    mqttClient.subscribe("/mediaControl/#", MqttQos.exactlyOnce);
+  }
+
+  void onMessage(List<MqttReceivedMessage<MqttMessage?>>? c) {
+    final recMess = c![0].payload as MqttPublishMessage;
+    String topic = c[0].topic;
+    String payload =
+        MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
+    print('Topic : $topic');
+    print('Payload : $payload');
+    if (topic == "/mediaControl/mediaStatus/volume") {
+      // print(payload);
+      setState(() => vol = payload.split(",")[0]);
+      // print("");
+    }
+    if (topic == "/mediaControl/mediaStatus/status") {
+      // print(payload);
+      setState(() => playingStatus = payload);
+      // print("");
+    }
+  }
+
+  void initMQTT() async {
+    mqttClient.keepAlivePeriod = 20;
+    mqttClient.onDisconnected = onDisconnected;
+    mqttClient.onSubscribed = onSubscribed;
+    mqttClient.onConnected = onConnected;
+    mqttClient.onAutoReconnect = onAutoReconnect;
+    final connMess = MqttConnectMessage()
+        .withClientIdentifier('Mqtt_MyClientUniqueIdQ1')
+        // .withWillTopic(
+        //     'willtopic') // If you set this you must set a will message
+        // .withWillMessage('My Will message')
+        .startClean() // Non persistent session for testing
+        .withWillQos(MqttQos.atLeastOnce);
+    print('MediaControl : Mosquitto client connecting....');
+    mqttClient.connectionMessage = connMess;
+    // mqttClient.autoReconnect = true;
+    try {
+      await mqttClient.connect();
+    } on Exception catch (e) {
+      mqttClient.disconnect();
+    }
+    if (mqttClient.connectionStatus!.state == MqttConnectionState.connected) {
+      print('MediaControl : Mosquitto client connected');
+    } else {
+      print(
+          'MediaControl : ERROR Mosquitto client connection failed - disconnecting, state is ${mqttClient.connectionStatus!.state}');
+    }
+    mqttClient.updates!.listen(onMessage);
+  }
+
+  void onAutoReconnect() {
+    // initMQTT();
+    print('MediaControl : OnAutoReconnect client callback - Auto Reconnect');
+  }
 
   Uint8List convertStringToUint8List(String str) {
     final List<int> codeUnits = str.codeUnits;
@@ -52,87 +149,23 @@ class _MyHomePageState extends State<MyHomePage> {
     return unit8List;
   }
 
+  MqttClientPayloadBuilder messageByteArray(String message) {
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(message);
+    return builder;
+  }
+
   @override
   void initState() {
     // TODO: implement initState
     super.initState();
-    XTransportTcpClient transport =
-        XTransportTcpClient.from("api.easyfarming.net", 1883);
-    mqttClient = MqttClient(transport, log: true, allowReconnect: true)
-      ..withKeepalive(60)
-      ..withClientID("mqttx_test");
-    mqttClient.onMqttConack((msg) {
-      print("onMqttConack: $msg");
-      if (msg.returnCode != MqttConnectReturnCode.connectionAccepted) {
-        mqttClient.close();
-        return;
-      }
-      mqttClient.reSub();
-    });
-
-    // mqttClient.onBeforeReconnect(() async {
-    //   print("reconnecting...");
-    // });
-    mqttClient.start();
-    mqttClient.subscribe(
-      "/mediaControl/mediaStatus/status",
-      onMessage: ((msg) {
-        String data = String.fromCharCodes(msg.data);
-        // dynamic dataJSON = jsonDecode(data);
-
-        // print("Get data from ${msg.t}");
-        print("${DateTime.now()} : ${data}");
-        setState(() {
-          playingStatus = data;
-        });
-      }),
-    );
-    mqttClient.subscribe(
-      "/mediaControl/mediaStatus/volume",
-      onMessage: ((msg) {
-        String data = String.fromCharCodes(msg.data);
-        List<String> dataSplit = data.split(",");
-
-        // if (dataSplit[0].split(":") == "mute"){
-        //   muteStatus = dataSplit[1];
-        // }
-        // if (dataSplit[0] == "vol"){
-        //   vol = dataSplit[1];
-        // }
-        // dynamic dataJSON = jsonDecode(data);
-        // playingStatus = data;
-        setState(() {
-          vol = dataSplit[0];
-          print(vol);
-          muteStatus = dataSplit[1];
-        });
-      }),
-    );
-    // mqttClient.subscribe("/mediaControl/mediaStatus/title",onMessage: onMessage)
-    //   var transport = XTransportWsClient.from(
-    //   "broker.emqx.io",
-    //   "/mqtt",
-    //   8083,
-    //   log: true,
-    //   protocols: ["mqtt"], // important
-    // );
+    initMQTT();
   }
 
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
       body: Center(
@@ -145,8 +178,10 @@ class _MyHomePageState extends State<MyHomePage> {
               children: [
                 ElevatedButton(
                     onPressed: () {
-                      mqttClient.publish("/mediaControl/mediaControl/volume",
-                          payload: convertStringToUint8List("Off"));
+                      mqttClient.publishMessage(
+                          "/mediaControl/mediaControl/volume",
+                          MqttQos.exactlyOnce,
+                          messageByteArray("Off").payload!);
                     },
                     child: muteStatus == "true"
                         ? const Icon(
@@ -159,8 +194,10 @@ class _MyHomePageState extends State<MyHomePage> {
                           )),
                 ElevatedButton(
                     onPressed: () {
-                      mqttClient.publish("/mediaControl/mediaControl/volume",
-                          payload: convertStringToUint8List("Down"));
+                      mqttClient.publishMessage(
+                          "/mediaControl/mediaControl/volume",
+                          MqttQos.exactlyOnce,
+                          messageByteArray("Down").payload!);
                     },
                     child: const Icon(
                       Icons.volume_down,
@@ -168,8 +205,10 @@ class _MyHomePageState extends State<MyHomePage> {
                     )),
                 ElevatedButton(
                     onPressed: () {
-                      mqttClient.publish("/mediaControl/mediaControl/volume",
-                          payload: convertStringToUint8List("Up"));
+                      mqttClient.publishMessage(
+                          "/mediaControl/mediaControl/volume",
+                          MqttQos.exactlyOnce,
+                          messageByteArray("Up").payload!);
                     },
                     child: const Icon(
                       Icons.volume_up,
@@ -182,11 +221,10 @@ class _MyHomePageState extends State<MyHomePage> {
               children: [
                 ElevatedButton(
                     onPressed: () {
-                      mqttClient.publish("/mediaControl/mediaControl/play",
-                          payload: convertStringToUint8List("Previous")
-                          // playingStatus == "Playing" ? "Pause" : "Play"),
-                          // qos: MqttQos.qos2
-                          );
+                      mqttClient.publishMessage(
+                          "/mediaControl/mediaControl/play",
+                          MqttQos.exactlyOnce,
+                          messageByteArray("Previous").payload!);
                     },
                     child: const Icon(
                       Icons.skip_previous_rounded,
@@ -194,15 +232,10 @@ class _MyHomePageState extends State<MyHomePage> {
                     )),
                 ElevatedButton(
                     onPressed: () {
-                      print("Toggle Sent");
-                      mqttClient.publish("/mediaControl/mediaControl/play",
-                          payload: convertStringToUint8List("Toggle")
-                          // playingStatus == "Playing" ? "Pause" : "Play"),
-                          // qos: MqttQos.qos2
-                          );
-                      // setState(() {
-                      //   playingStatus = "Pending";
-                      // });
+                      mqttClient.publishMessage(
+                          "/mediaControl/mediaControl/play",
+                          MqttQos.exactlyOnce,
+                          messageByteArray("Toggle").payload!);
                     },
                     child: playingStatus == "Playing"
                         ? const Icon(
@@ -213,17 +246,15 @@ class _MyHomePageState extends State<MyHomePage> {
                             ? const CircularProgressIndicator()
                             : const Icon(Icons.pause, size: 65)),
                 ElevatedButton(
-                    onPressed: () {
-                      mqttClient.publish("/mediaControl/mediaControl/play",
-                          payload: convertStringToUint8List("Next")
-                          // playingStatus == "Playing" ? "Pause" : "Play"),
-                          // qos: MqttQos.qos2
-                          );
-                    },
-                    child: const Icon(
-                      Icons.skip_next_rounded,
-                      size: 65,
-                    )),
+                  onPressed: () {
+                    mqttClient.publishMessage("/mediaControl/mediaControl/play",
+                        MqttQos.exactlyOnce, messageByteArray("Next").payload!);
+                  },
+                  child: const Icon(
+                    Icons.skip_next_rounded,
+                    size: 65,
+                  ),
+                ),
               ],
             ),
           ],
@@ -231,8 +262,7 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          mqttClient.publish("/mediaControl/mediaControl/",
-              payload: convertStringToUint8List("abc"));
+          initMQTT();
         },
         child: Text(
           vol,
@@ -241,4 +271,14 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
     );
   }
+}
+
+/// The subscribed callback
+void onSubscribed(String topic) {
+  print('MediaControl : Subscription confirmed for topic $topic');
+}
+
+/// The unsolicited disconnect callback
+void onDisconnected() {
+  print('MediaControl : OnDisconnected client callback - Client disconnection');
 }
