@@ -51,6 +51,7 @@ class _MyAppState extends State<MyApp> {
     try {
       await mqttClient.connect();
     } on Exception catch (e) {
+      print(e);
       mqttClient.disconnect();
     }
     if (mqttClient.connectionStatus!.state == MqttConnectionState.connected) {
