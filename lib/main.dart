@@ -88,7 +88,7 @@ class _MyAppState extends State<MyApp> {
         children: [
           PageView(
             controller: pageController,
-            onPageChanged: (page) => pageIndex = page,
+            onPageChanged: (page) => setState(() => (pageIndex = page)),
             children: <Widget>[
               MediaControl(
                   title: 'Super Quick Volume Control', mqttClient: mqttClient),
