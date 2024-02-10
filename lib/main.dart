@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:media_control_mqtt/media_control.dart';
 import 'package:media_control_mqtt/slide_control.dart';
